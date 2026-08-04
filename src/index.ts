@@ -3,6 +3,7 @@ import { cors } from "@elysia/cors";
 import { corsOptions } from "@/configs/cors";
 import openapiApp from "@/modules/openapi";
 import betterAuth from "@/modules/auth";
+import hierarchyExampleApp from "@/modules/auth/hierarchy-example";
 import httpLogger from "@/modules/http";
 import type { TelemetryPayloadV0 } from "@/types/telemetry";
 import { ingestTelemetry } from "@/utils/ingestion";
@@ -21,6 +22,7 @@ const app = new Elysia({
   .use(cors(corsOptions))
   .use(openapiApp)
   .use(betterAuth)
+  .use(hierarchyExampleApp)
   .use(httpLogger())
   .get("/", () => "Hello Elysia")
   .get("/health", () => "OK")

@@ -5,11 +5,11 @@ import { createId } from "@paralleldrive/cuid2";
 import db from "@/utils/db";
 import {
   ac,
-  fieldRole,
-  municipalityRole,
-  provinceRole,
-  governmentRole,
-} from "@/utils/permission";
+  ownerRole,
+  adminRole,
+  memberRole,
+  orgHierarchy,
+} from "@/utils/auth/permission";
 
 import {
   sendVerificationEmail,
@@ -63,10 +63,9 @@ export const auth = betterAuth({
     organization({
       ac,
       roles: {
-        field: fieldRole,
-        municipality: municipalityRole,
-        province: provinceRole,
-        government: governmentRole,
+        owner: ownerRole,
+        admin: adminRole,
+        member: memberRole,
       },
       schema: {
         organization: {
@@ -74,7 +73,7 @@ export const auth = betterAuth({
             orgType: {
               type: "string",
               required: true,
-              enum: ["field", "municipality", "province", "government"],
+              enum: Object.keys(orgHierarchy),
             },
             parentOrgId: {
               type: "string",
