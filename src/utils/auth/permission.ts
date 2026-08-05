@@ -76,3 +76,5 @@ export const orgHierarchy = {
   municipality: 3,
   field: 4,
 } as const;
+
+export const userRoles = ["owner", "admin", "member"] as const;
