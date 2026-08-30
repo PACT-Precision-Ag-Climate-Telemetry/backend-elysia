@@ -14,6 +14,7 @@ export interface TelemetryReadingV0 {
   battery_voltage: number;
   battery_percentage: number;
   status: number;
+  status_flags: string[];
   error_code: number;
 }
 

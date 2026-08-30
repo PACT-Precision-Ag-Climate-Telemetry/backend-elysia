@@ -22,6 +22,33 @@ const FAILED_MESSAGES_QUEUE = "failed_messages_queue";
 const ERROR_HANDLER_QUEUE = "error_handler_queue";
 const TELEMETRY_EXCHANGE = "pact.telemetry";
 const ROUTING_KEY_INVALID_CHARACTERS = /[^A-Za-z0-9._-]/g;
+const QUOTE_DOUBLE = "\"";
+const QUOTE_SINGLE = "'";
+
+const TELEMETRY_STATUS_FLAGS = [
+  "battery_read_failed",
+  "ultrasonic_read_failed",
+  "temperature_read_failed",
+  "methane_read_failed",
+  "co2_read_failed",
+] as const;
+const UNKNOWN_STATUS_FLAG_PATTERN = /^unknown_bit_[0-7]$/;
+const DEVICE_ID_PATTERN = /^.{3}-.{3}-.{4}$/;
+
+type OptionalBlockField =
+  | "latitude"
+  | "longitude"
+  | "mobile_country_code"
+  | "mobile_network_code";
+
+const telemetryStatusFlagSchema = z
+  .string()
+  .refine(
+    (flag) =>
+      (TELEMETRY_STATUS_FLAGS as readonly string[]).includes(flag) ||
+      UNKNOWN_STATUS_FLAG_PATTERN.test(flag),
+    { message: "must be a known status flag or unknown_bit_0-7" },
+  );
 
 const telemetryReadingSchema = z
   .object({
@@ -36,71 +63,63 @@ const telemetryReadingSchema = z
     offset: z.number().int().min(0).max(65535),
     depth: z.number().int().min(0).max(65535),
     moisture_raw: z.number().int().min(0).max(65535),
-    moisture: z.number().min(0),
+    moisture: z.number().min(0).max(655.35),
     battery_voltage: z.number().int().min(0).max(65535),
-    battery_percentage: z.number().int().min(0).max(65535),
+    battery_percentage: z.number().min(0).max(655.35),
     status: z.number().int().min(0).max(255),
+    status_flags: z
+      .array(telemetryStatusFlagSchema)
+      .refine((flags) => new Set(flags).size === flags.length, {
+        message: "must not contain duplicate flags",
+      }),
     error_code: z.number().int().min(0).max(255),
   })
   .strict();
 
 const telemetryPayloadSchema: z.ZodType<TelemetryPayloadV0> = z
   .object({
-    id: z.string(),
+    id: z.string().regex(DEVICE_ID_PATTERN),
     version: z.string().regex(/^[0-9]+$/),
     flags: z.number().int().min(0).max(255),
-    readings: z.array(telemetryReadingSchema).min(1),
+    readings: z.array(telemetryReadingSchema).min(1).max(255),
     has_gps: z.boolean(),
-    latitude: z.number().optional(),
-    longitude: z.number().optional(),
+    latitude: z.number().min(-90).max(90).optional(),
+    longitude: z.number().min(-180).max(180).optional(),
     has_cell: z.boolean(),
     mobile_country_code: z.number().int().min(0).max(65535).optional(),
     mobile_network_code: z.number().int().min(0).max(65535).optional(),
   })
   .strict()
   .superRefine((payload, ctx) => {
-    if (
-      payload.has_gps &&
-      (payload.latitude === undefined || payload.longitude === undefined)
-    ) {
-      if (payload.latitude === undefined) {
+    const requireWhenPresent = (
+      isPresent: boolean,
+      field: OptionalBlockField,
+      guard: "has_gps" | "has_cell",
+    ) => {
+      const isSet = payload[field] !== undefined;
+
+      if (isPresent && !isSet) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "latitude is required when has_gps is true",
-          path: ["latitude"],
+          message: `${field} is required when ${guard} is true`,
+          path: [field],
         });
+        return;
       }
 
-      if (payload.longitude === undefined) {
+      if (!isPresent && isSet) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "longitude is required when has_gps is true",
-          path: ["longitude"],
+          message: `${field} must be omitted when ${guard} is false`,
+          path: [field],
         });
       }
-    }
+    };
 
-    if (
-      payload.has_cell &&
-      (payload.mobile_country_code === undefined ||
-        payload.mobile_network_code === undefined)
-    ) {
-      if (payload.mobile_country_code === undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "mobile_country_code is required when has_cell is true",
-          path: ["mobile_country_code"],
-        });
-      }
-
-      if (payload.mobile_network_code === undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "mobile_network_code is required when has_cell is true",
-          path: ["mobile_network_code"],
-        });
-      }
-    }
+    requireWhenPresent(payload.has_gps, "latitude", "has_gps");
+    requireWhenPresent(payload.has_gps, "longitude", "has_gps");
+    requireWhenPresent(payload.has_cell, "mobile_country_code", "has_cell");
+    requireWhenPresent(payload.has_cell, "mobile_network_code", "has_cell");
   });
 
 const ingestErrorPayloadSchema: z.ZodType<IngestErrorPayloadV0> = z
@@ -122,7 +141,10 @@ function formatZodErrors(issues: z.ZodIssue[] | undefined): string {
   }
 
   return issues
-    .map((issue) => `${issue.path.join(".") || "/"} ${issue.message}`)
+    .map((issue) => {
+      const instancePath = issue.path.length ? `/${issue.path.join("/")}` : "/";
+      return `${instancePath} ${issue.message || "invalid value"}`;
+    })
     .join("; ");
 }
 
@@ -149,7 +171,21 @@ function normalizeEnvValue(
   value: string | undefined | null,
 ): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const hasLeadingQuote =
+    trimmed.startsWith(QUOTE_DOUBLE) || trimmed.startsWith(QUOTE_SINGLE);
+  const hasTrailingQuote =
+    trimmed.endsWith(QUOTE_DOUBLE) || trimmed.endsWith(QUOTE_SINGLE);
+
+  if (hasLeadingQuote && hasTrailingQuote && trimmed.length >= 2) {
+    const unquoted = trimmed.slice(1, -1).trim();
+    return unquoted ? unquoted : undefined;
+  }
+
+  return trimmed;
 }
 
 export function buildTelemetryRoutingKey(
@@ -311,7 +347,7 @@ export async function startIngestionTelemetryConsumer(
   }
 
   if (options.prefetch && options.prefetch > 0) {
-    channel.prefetch(options.prefetch);
+    await channel.prefetch(options.prefetch);
   }
 
   await channel.consume(queueName, async (message) => {

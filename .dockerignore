@@ -1,0 +1,14 @@
+node_modules
+.git
+.gitignore
+.gitattributes
+Dockerfile
+.dockerignore
+README.md
+logs
+**/*.log
+.env
+.env.*
+drizzle
+drizzle.config.ts
+**/*.test.ts
