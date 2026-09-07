@@ -92,3 +92,44 @@ Deliberately not implemented, matching the reference behavior:
 - **Unbounded in-flight work.** The consume callback is async and not awaited by the client; only
   `prefetch` limits concurrency.
 - **A single shared channel** for consuming and error-publishing; a channel-level error kills both.
+
+## Temporary telemetry query endpoint
+
+> **Temporary.** Guarded by a single static token rather than a session, so it does **no**
+> organization scoping — any holder of the token can read any device. Remove it, or move it
+> behind better-auth with the org hierarchy checks in [src/modules/org](src/modules/org), once
+> the dashboard can query telemetry through an authenticated session.
+> See [src/modules/telemetry](src/modules/telemetry).
+
+```
+GET /telemetry/devices/:deviceId
+Authorization: Bearer <TELEMETRY_API_TOKEN>
+```
+
+### Environment variables
+
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `TELEMETRY_API_TOKEN` | yes | shared secret; unset means every request gets `503` |
+
+### Query parameters
+
+| Parameter | Default | Notes |
+| --- | --- | --- |
+| `from` | none | ISO 8601 datetime, inclusive lower bound on `created_at` |
+| `to` | none | ISO 8601 datetime, inclusive upper bound on `created_at` |
+| `limit` | `100` | 1-1000 |
+| `offset` | `0` | |
+| `order` | `desc` | `asc` or `desc` by `created_at`, with `id` as tiebreaker |
+
+### Responses
+
+`200` returns `{ deviceId, limit, offset, order, count, readings }`, where each reading is a
+`telemetry_v0` row with `createdAt` as an ISO 8601 string. Other codes: `400` (`from` after `to`),
+`401` (missing/invalid token), `404` (unknown device), `422` (query parameter validation),
+`503` (`TELEMETRY_API_TOKEN` not configured).
+
+```bash
+curl -H "Authorization: Bearer $TELEMETRY_API_TOKEN" \
+  "http://localhost:3000/telemetry/devices/ABC-DEF-1234?limit=50&order=desc"
+```
