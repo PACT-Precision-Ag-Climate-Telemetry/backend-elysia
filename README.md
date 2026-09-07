@@ -202,3 +202,86 @@ which would otherwise surface as a 500 instead of a 400.
 
 Every read must filter `isNull(farmField.deletedAt)` — the soft delete is a convention, not a
 constraint, so nothing in the database enforces it for you.
+
+## Organization territories and spatial hierarchy
+
+Being a lower tier does not put an organization under a higher one. A `field` is under a
+`municipality` only when **its area falls inside that municipality's area**. Tier ordering says
+which organizations *may* be a parent; geography says which one *is*.
+
+Each organization carries its own boundary:
+
+| Column | Notes |
+| --- | --- |
+| `area` | `geometry(MultiPolygon,4326)`, GiST indexed, null until assigned |
+| `area_source` | `reference` (fixed administrative GeoJSON) or `custom` (hand drawn) |
+
+MultiPolygon rather than Polygon because a territory can be disjoint — an enclave, an island, a
+district split by a river — and because joining several administrative features can leave gaps.
+
+### Who may draw what
+
+Only a `field` organization may submit a `custom` boundary. Every higher tier traces fixed
+administrative GeoJSON. Several features can be joined into one territory: `toAreaGeometry([a, b])`
+runs `ST_UnaryUnion` over them, dissolving shared borders into a single outline, then `ST_Multi`
+normalizes the result. A province defined as "these four districts" is therefore one area to test
+against, exactly like a hand-drawn one — the only difference is provenance, recorded in
+`area_source` and enforced by `isAreaSourceAllowed`.
+
+### Resolving the parent
+
+[src/modules/org/spatial.ts](src/modules/org/spatial.ts):
+
+```ts
+// Every territory that contains this area, tightest fit first
+const candidates = await findContainingOrganizations(area, { belowOrgType: "field" });
+
+// Just the immediate parent: the smallest containing territory a tier or more up
+const parent = await resolveParentOrganization(area, "field");
+
+// Does a proposed parent actually contain it?
+const { contained, coverage, reason } = await checkParentContainsArea(parentOrgId, area);
+```
+
+`findContainingOrganizations` restricts candidates to tiers strictly above the child's, prefilters
+with `ST_Intersects` so the GiST index does the work, then tests containment exactly. Results are
+ordered by coverage descending, then area ascending — so the immediate parent comes first and a
+grandparent that also contains the area sorts after it. An area inside no mapped territory returns
+no candidates, which is a valid answer, not an error.
+
+Full containment is tested with `ST_CoveredBy` rather than by comparing computed areas: it is a
+topological predicate, so it is exact and needs no intersection geometry. Lowering `minCoverage`
+switches to the area ratio, for the case where a boundary straddles two parents:
+
+```ts
+// Report anything at least 60% inside, so a straddling field is visible
+await findContainingOrganizations(area, { belowOrgType: "field", minCoverage: 0.6 });
+```
+
+Coverage is computed with `::geography` casts, so the ratio is of true surface areas — comparing
+raw degrees distorts badly away from the equator.
+
+### Creation
+
+`POST /org/create` accepts an optional `area` — one GeoJSON Polygon/MultiPolygon, or an array of
+them to be joined — plus an optional `areaSource`, defaulting to `custom` for a field and
+`reference` for every higher tier.
+
+**When an area is supplied, geography decides the parent and any `parentOrgId` in the body is
+ignored.** Resolution runs in two stages:
+
+1. the smallest territory that wholly contains the area (`parentResolution: "contained"`);
+2. failing that, the territory holding the largest share of a straddling boundary, provided that
+   share is at least `MAJORITY_COVERAGE` (60%) — `parentResolution: "majority"`;
+3. otherwise no parent (`"none"`), which a non-field organization rejects with a 400.
+
+The response echoes `areaSource` and `parentResolution`, so a caller can tell a clean containment
+from a straddle that was resolved by majority.
+
+Creating a non-field organization still requires `owner` or `admin` in the parent — now checked
+against the *resolved* parent. A field organization is attached to whatever territory it falls in
+without needing membership there, which is the point: a field physically inside a municipality
+belongs to it.
+
+New 400s: `Only a field organization may draw a custom area`, `Organization area is not valid
+GeoJSON`, `Could not resolve a parent organization from the given area`.

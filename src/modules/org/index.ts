@@ -12,6 +12,13 @@ import db from "@/utils/db";
 import { organization, member } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import generateSlug from "@/utils/slug";
+import {
+  isAreaSourceAllowed,
+  resolveParentOrganization,
+  type ParentResolutionRule,
+} from "@/modules/org/spatial";
+import { isValidArea, toAreaGeometry } from "@/utils/geo";
+import type { AreaSource } from "@/types/geo";
 
 const organizationApp = new Elysia({ name: "org", prefix: "/org" })
   .use(betterAuth)
@@ -28,31 +35,67 @@ const organizationApp = new Elysia({ name: "org", prefix: "/org" })
 
       const userId = session.user.id;
 
-      const { orgName, slug, logo, orgType, parentOrgId } = body;
+      const { orgName, slug, logo, orgType, parentOrgId, area, areaSource } =
+        body;
 
-      if (orgType !== "field") {
-        if (!parentOrgId) {
+      const areas = area ? (Array.isArray(area) ? area : [area]) : [];
+      // A field draws its own boundary; every higher tier traces fixed
+      // administrative GeoJSON.
+      const resolvedAreaSource: AreaSource =
+        areaSource ?? (orgType === "field" ? "custom" : "reference");
+
+      let resolvedParentOrgId = parentOrgId;
+      let parentResolution: ParentResolutionRule | null = null;
+
+      if (areas.length > 0) {
+        if (!isAreaSourceAllowed(orgType, resolvedAreaSource)) {
           return status(400, {
-            message:
-              "Parent organization ID is required for non-field organizations",
+            message: "Only a field organization may draw a custom area",
           });
         }
 
-        const parentOrgType = (
+        if (!areas.every(isValidArea)) {
+          return status(400, {
+            message: "Organization area is not valid GeoJSON",
+          });
+        }
+
+        // Geography decides parentage, so anything the caller sent is ignored:
+        // the parent is the smallest territory containing this area, or on a
+        // straddle the one holding the largest share of it.
+        const resolution = await resolveParentOrganization(areas, orgType);
+
+        parentResolution = resolution.rule;
+        resolvedParentOrgId = resolution.parent?.id;
+      }
+
+      if (orgType !== "field") {
+        if (!resolvedParentOrgId) {
+          return status(400, {
+            message:
+              areas.length > 0
+                ? "Could not resolve a parent organization from the given area"
+                : "Parent organization ID is required for non-field organizations",
+          });
+        }
+
+        const parentOrg = (
           await db
             .select({
               orgType: organization.orgType,
             })
             .from(organization)
-            .where(eq(organization.id, parentOrgId))
+            .where(eq(organization.id, resolvedParentOrgId))
             .limit(1)
-        )[0].orgType as keyof typeof orgHierarchy;
+        )[0];
 
-        if (!parentOrgType) {
+        if (!parentOrg) {
           return status(400, {
             message: "Parent organization not found",
           });
         }
+
+        const parentOrgType = parentOrg.orgType as keyof typeof orgHierarchy;
 
         const userRoleInParentOrg = (
           await db
@@ -63,11 +106,11 @@ const organizationApp = new Elysia({ name: "org", prefix: "/org" })
             .where(
               and(
                 eq(member.userId, userId),
-                eq(member.organizationId, parentOrgId),
+                eq(member.organizationId, resolvedParentOrgId),
               ),
             )
             .limit(1)
-        )[0].role as (typeof userRoles)[number];
+        )[0]?.role as (typeof userRoles)[number] | undefined;
 
         const pendingOrgIndex = orgHierarchy[orgType];
         const parentOrgIndex = orgHierarchy[parentOrgType];
@@ -116,8 +159,20 @@ const organizationApp = new Elysia({ name: "org", prefix: "/org" })
         logo || null, // TODO: Handle logo upload and get the URL?
         userId,
         orgType || "field",
-        parentOrgId,
+        resolvedParentOrgId,
       );
+
+      // The boundary is written separately: better-auth passes plain values
+      // through, and a geometry column needs ST_GeomFromGeoJSON around it.
+      if (areas.length > 0) {
+        await db
+          .update(organization)
+          .set({
+            area: toAreaGeometry(areas),
+            areaSource: resolvedAreaSource,
+          })
+          .where(eq(organization.id, data.id));
+      }
 
       const response = {
         id: data.id,
@@ -128,6 +183,8 @@ const organizationApp = new Elysia({ name: "org", prefix: "/org" })
         metadata: data.metadata ?? {},
         orgType: data.orgType,
         parentOrgId: data.parentOrgId,
+        areaSource: areas.length > 0 ? resolvedAreaSource : null,
+        parentResolution,
         members: (data.members ?? []).map((member) =>
           member
             ? {

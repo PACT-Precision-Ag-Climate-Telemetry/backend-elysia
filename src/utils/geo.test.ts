@@ -2,12 +2,14 @@
 import { describe, expect, it } from "bun:test";
 import {
   fromGeometry,
+  isValidArea,
   isValidPolygon,
   parseGeoJsonPolygon,
+  toAreaGeometry,
   toGeometry,
 } from "@/utils/geo";
 import { farmField } from "@/db/schema";
-import type { GeoJsonPolygon } from "@/types/geo";
+import type { GeoJsonMultiPolygon, GeoJsonPolygon } from "@/types/geo";
 
 const square: GeoJsonPolygon = {
   type: "Polygon",
@@ -100,5 +102,67 @@ describe("SQL helpers", () => {
 
   it("wraps a column in ST_AsGeoJSON", () => {
     expect(fromGeometry(farmField.area)).toBeDefined();
+  });
+});
+
+describe("toAreaGeometry", () => {
+  it("wraps a single area in ST_Multi without a union", () => {
+    const chunks = JSON.stringify(toAreaGeometry(square).queryChunks);
+
+    expect(chunks).toContain("ST_Multi");
+    expect(chunks).not.toContain("ST_UnaryUnion");
+  });
+
+  it("joins several areas into one geometry", () => {
+    const other: GeoJsonPolygon = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [99.0, 18.79],
+          [99.01, 18.79],
+          [99.01, 18.8],
+          [99.0, 18.8],
+          [99.0, 18.79],
+        ],
+      ],
+    };
+    const chunks = JSON.stringify(toAreaGeometry([square, other]).queryChunks);
+
+    expect(chunks).toContain("ST_UnaryUnion");
+    expect(chunks).toContain("ST_Collect");
+  });
+
+  it("rejects an empty list rather than emitting invalid SQL", () => {
+    expect(() => toAreaGeometry([])).toThrow(
+      "toAreaGeometry requires at least one area",
+    );
+  });
+});
+
+describe("isValidArea", () => {
+  it("accepts a multipolygon of closed rings", () => {
+    const multi: GeoJsonMultiPolygon = {
+      type: "MultiPolygon",
+      coordinates: [square.coordinates],
+    };
+
+    expect(isValidArea(multi)).toBe(true);
+  });
+
+  it("rejects a multipolygon containing an unclosed ring", () => {
+    const multi: GeoJsonMultiPolygon = {
+      type: "MultiPolygon",
+      coordinates: [[square.coordinates[0]!.slice(0, -1)]],
+    };
+
+    expect(isValidArea(multi)).toBe(false);
+  });
+
+  it("rejects an empty multipolygon", () => {
+    expect(isValidArea({ type: "MultiPolygon", coordinates: [] })).toBe(false);
+  });
+
+  it("still validates plain polygons", () => {
+    expect(isValidArea(square)).toBe(true);
   });
 });

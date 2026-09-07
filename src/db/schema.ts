@@ -11,21 +11,33 @@ import {
 } from "drizzle-orm/pg-core";
 import { createId } from "@paralleldrive/cuid2";
 import { jsonb } from "drizzle-orm/cockroach-core";
-import { SRID_WGS84, type GeoJsonPolygon } from "@/types/geo";
+import {
+  SRID_WGS84,
+  type GeoJsonMultiPolygon,
+  type GeoJsonPolygon,
+} from "@/types/geo";
 
 /**
- * A PostGIS `geometry(Polygon,4326)` column.
+ * PostGIS geometry columns.
  *
  * Drizzle's built-in `geometry` helper hardcodes `geometry(point)`, so a custom
- * type is what gives us a polygon. PostGIS speaks WKB/EWKB on the wire, not
+ * type is what gives us polygons. PostGIS speaks WKB/EWKB on the wire, not
  * GeoJSON, so reads and writes must go through ST_AsGeoJSON / ST_GeomFromGeoJSON
- * — see @/utils/geo, and never select this column bare.
+ * — see @/utils/geo, and never select these columns bare.
  */
-const polygon = customType<{ data: GeoJsonPolygon; driverData: string }>({
-  dataType() {
-    return `geometry(Polygon,${SRID_WGS84})`;
-  },
-});
+function geometryColumn<TGeometry>(geometryType: string) {
+  return customType<{ data: TGeometry; driverData: string }>({
+    dataType() {
+      return `geometry(${geometryType},${SRID_WGS84})`;
+    },
+  });
+}
+
+/** One contiguous parcel — a farm field boundary. */
+const polygon = geometryColumn<GeoJsonPolygon>("Polygon");
+
+/** Possibly disjoint parts — an organization's territory. */
+const multiPolygon = geometryColumn<GeoJsonMultiPolygon>("MultiPolygon");
 
 export const user = pgTable("user", {
   id: text("id")
@@ -113,18 +125,33 @@ export const verification = pgTable(
   (table) => [index("verification_identifier_idx").on(table.identifier)],
 );
 
-export const organization = pgTable("organization", {
-  id: text("id")
-    .primaryKey()
-    .$defaultFn(() => createId()),
-  name: text("name").notNull(),
-  slug: text("slug").notNull().unique(),
-  logo: text("logo"),
-  createdAt: timestamp("created_at").notNull(),
-  metadata: text("metadata"),
-  orgType: text("org_type").notNull(),
-  parentOrgId: text("parent_org_id"),
-});
+export const organization = pgTable(
+  "organization",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    name: text("name").notNull(),
+    slug: text("slug").notNull().unique(),
+    logo: text("logo"),
+    createdAt: timestamp("created_at").notNull(),
+    metadata: text("metadata"),
+    orgType: text("org_type").notNull(),
+    parentOrgId: text("parent_org_id"),
+    // The organization's territory. Null until a boundary is assigned, which is
+    // why containment queries must filter it out rather than assume it exists.
+    area: multiPolygon("area"),
+    // "reference" (fixed administrative GeoJSON, possibly several joined) or
+    // "custom" (hand drawn). Only a field organization may be "custom".
+    areaSource: text("area_source"),
+  },
+  (table) => [
+    index("organization_parentOrgId_idx").on(table.parentOrgId),
+    // Makes ST_Intersects / ST_CoveredBy against every organization cheap, which
+    // is what resolving a parent by containment leans on.
+    index("organization_area_idx").using("gist", table.area),
+  ],
+);
 
 export const member = pgTable(
   "member",
