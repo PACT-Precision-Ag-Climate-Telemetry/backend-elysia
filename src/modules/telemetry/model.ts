@@ -88,7 +88,7 @@ const deviceSchema = z.object({
   updatedAt: z.string().datetime(),
 }) satisfies z.ZodType<DeviceResponse>;
 
-const readingSchema = z.object({
+export const telemetryReadingSchema = z.object({
   id: z.string(),
   deviceId: z.string(),
   temperature: z.number().nullable(),
@@ -130,7 +130,7 @@ export const TelemetryModel = {
     offset: z.number(),
     order: z.enum(["asc", "desc"]),
     count: z.number(),
-    readings: z.array(readingSchema),
+    readings: z.array(telemetryReadingSchema),
   }) satisfies z.ZodType<TelemetryQueryResponse>,
   responseBadRequest: z.object({
     message: z.literal("Query parameter 'from' must be earlier than 'to'"),

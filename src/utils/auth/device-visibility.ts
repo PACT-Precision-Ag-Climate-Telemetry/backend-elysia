@@ -1,4 +1,4 @@
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 import { device, member, organization } from "@/db/schema";
 import { orgHierarchy } from "@/utils/auth/permission";
 import db from "@/utils/db";
@@ -157,6 +157,68 @@ export async function listVisibleDeviceIds(userId: string): Promise<string[]> {
     .where(and(eq(member.userId, userId), isNull(organization.deletedAt)));
 
   return rows.map((row) => row.id);
+}
+
+export interface VisibleDevice {
+  id: string;
+  modelName: string;
+  latitude: number | null;
+  longitude: number | null;
+  mcc: number | null;
+  mnc: number | null;
+  organizationId: string | null;
+  farmFieldId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  reason: Exclude<VisibilityReason, "none">;
+}
+
+/**
+ * A page of the devices a user can see, each carrying why.
+ *
+ * Grouped by device rather than returning one row per membership, since two of
+ * the user's organizations can both have a claim on the same device — a
+ * province by territory and a field by ownership. bool_or collapses those into
+ * a single answer per device.
+ */
+export async function listVisibleDevices(
+  userId: string,
+  options: { limit: number; offset: number },
+): Promise<VisibleDevice[]> {
+  const owns = sql<boolean>`bool_or(${deviceOwnedByOrg})`;
+
+  const rows = await db
+    .select({
+      id: device.id,
+      modelName: device.modelName,
+      latitude: device.latitude,
+      longitude: device.longitude,
+      mcc: device.mcc,
+      mnc: device.mnc,
+      organizationId: device.organizationId,
+      farmFieldId: device.farmFieldId,
+      createdAt: device.createdAt,
+      updatedAt: device.updatedAt,
+      owns,
+    })
+    .from(member)
+    .innerJoin(organization, eq(organization.id, member.organizationId))
+    .innerJoin(
+      device,
+      or(deviceOwnedByOrg, sql`(${orgTypeSeesByArea()} AND ${deviceInOrgArea})`)!,
+    )
+    .where(and(eq(member.userId, userId), isNull(organization.deletedAt)))
+    .groupBy(device.id)
+    .orderBy(asc(device.id))
+    .limit(options.limit)
+    .offset(options.offset);
+
+  // The join already required one rule or the other to match, so a device that
+  // is not owned is here by territory. Only ownership needs aggregating.
+  return rows.map(({ owns: ownsDevice, ...row }) => ({
+    ...row,
+    reason: ownsDevice ? ("owner" as const) : ("area" as const),
+  }));
 }
 
 /**

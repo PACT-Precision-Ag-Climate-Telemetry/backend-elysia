@@ -459,3 +459,47 @@ visibility, adopts no children and is never resolved as a parent.
 
 An admin can edit its own organization but not delete it, while it can do both to one below —
 that asymmetry is the existing model, not something these endpoints add.
+
+## v1 device and telemetry queries
+
+The session-authenticated way to read devices and their readings, scoped by the organization rules
+rather than by a shared secret. [src/modules/device/v1.ts](src/modules/device/v1.ts)
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /v1/device` | a page of the devices the caller can see |
+| `GET /v1/device/:deviceId` | one device, plus which organization made it visible |
+| `GET /v1/device/:deviceId/telemetry` | that device's readings |
+
+Visibility is the rule from [device visibility](#device-visibility): levels 0-3 see any device
+standing inside their territory, level 4 sees only what it owns. Every response carries a
+`visibility` field of `owner` or `area`, so a client can tell a device it controls from one it is
+merely overseeing.
+
+### Query parameters
+
+`GET /v1/device` takes `limit` (1-200, default 50) and `offset`.
+
+`GET /v1/device/:deviceId/telemetry` takes the same `from`, `to`, `limit` (1-1000, default 100),
+`offset` and `order` as the temporary bearer endpoint.
+
+### A device you cannot see is a 404
+
+Not a 403. Answering "it exists, but is not yours" would leak the presence and id of devices in
+territories the caller has no claim on. The visibility check also runs *before* the device is
+confirmed to exist, so a device outside your scope and one that was never provisioned are
+indistinguishable from the outside.
+
+Errors carry a code, as elsewhere in v1: `unauthorized` (401), `device_not_found` (404),
+`invalid_range` (400, `from` after `to`).
+
+### Relationship to the temporary endpoint
+
+`GET /telemetry/devices/:deviceId` still exists and still takes `TELEMETRY_API_TOKEN`. It performs
+**no** organization scoping, so it remains the thing to remove once clients have moved to
+`/v1/device/:deviceId/telemetry`.
+
+The two differ in shape: the temporary endpoint embeds the full device and its organization path in
+every response, while the v1 telemetry route returns readings and expects the client to fetch the
+device separately from `GET /v1/device/:deviceId` — one round trip more, but it does not re-send a
+five-level organization chain alongside every page of readings.
