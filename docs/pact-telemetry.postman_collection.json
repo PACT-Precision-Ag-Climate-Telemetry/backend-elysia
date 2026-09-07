@@ -42,11 +42,22 @@
           "name": "Latest readings (defaults)",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/telemetry/devices/{{deviceId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["telemetry", "devices", "{{deviceId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "telemetry",
+                "devices",
+                "{{deviceId}}"
+              ]
             },
             "description": "Newest 100 readings for the device (limit=100, offset=0, order=desc)."
           },
@@ -63,9 +74,23 @@
                   "  pm.expect(body.readings).to.be.an('array').with.lengthOf(body.count);",
                   "});",
                   "pm.test('device block describes the requested device', () => {",
-                  "  pm.expect(body.device).to.have.all.keys('id', 'modelName', 'latitude', 'longitude', 'mcc', 'mnc', 'organizationId', 'createdAt', 'updatedAt');",
+                  "  pm.expect(body.device).to.have.all.keys('id', 'modelName', 'latitude', 'longitude', 'mcc', 'mnc', 'organizationId', 'organization', 'createdAt', 'updatedAt');",
                   "  pm.expect(body.device.id).to.eql(pm.collectionVariables.get('deviceId'));",
                   "  pm.expect(body.device.modelName).to.be.a('string');",
+                  "});",
+                  "pm.test('organization carries its level and root-first path', () => {",
+                  "  const org = body.device.organization;",
+                  "  if (org === null) {",
+                  "    pm.expect(body.device.organizationId, 'unclaimed device must have a null organizationId').to.be.null;",
+                  "    return;",
+                  "  }",
+                  "  pm.expect(org).to.have.all.keys('id', 'name', 'slug', 'orgType', 'level', 'parentOrgId', 'path');",
+                  "  pm.expect(org.id).to.eql(body.device.organizationId);",
+                  "  pm.expect(org.orgType).to.be.oneOf(['root', 'government', 'province', 'municipality', 'field']);",
+                  "  pm.expect(org.path[org.path.length - 1].id, 'path ends at the owning org').to.eql(org.id);",
+                  "  pm.expect(org.path[0].parentOrgId, 'path starts at a root').to.be.null;",
+                  "  const levels = org.path.map((o) => o.level);",
+                  "  pm.expect(levels, 'levels increase from root downward').to.eql(levels.slice().sort((a, b) => a - b));",
                   "});",
                   "pm.test('readings are newest first', () => {",
                   "  const times = body.readings.map((r) => Date.parse(r.createdAt));",
@@ -83,16 +108,27 @@
                 "header": [],
                 "url": {
                   "raw": "{{baseUrl}}/telemetry/devices/{{deviceId}}",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["telemetry", "devices", "{{deviceId}}"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "telemetry",
+                    "devices",
+                    "{{deviceId}}"
+                  ]
                 }
               },
               "status": "OK",
               "code": 200,
               "_postman_previewlanguage": "json",
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "cookie": [],
-              "body": "{\n  \"device\": {\n    \"id\": \"ABC-DEF-1234\",\n    \"modelName\": \"ABC-DEF\",\n    \"latitude\": 13.7563,\n    \"longitude\": 100.5018,\n    \"mcc\": 520,\n    \"mnc\": 3,\n    \"organizationId\": \"org_2t9x\",\n    \"createdAt\": \"2026-08-01T09:12:00.000Z\",\n    \"updatedAt\": \"2026-09-07T04:10:00.000Z\"\n  },\n  \"limit\": 100,\n  \"offset\": 0,\n  \"order\": \"desc\",\n  \"count\": 1,\n  \"readings\": [\n    {\n      \"id\": \"tz4a98xxat96iws9zmbrgj3a\",\n      \"deviceId\": \"ABC-DEF-1234\",\n      \"temperature\": 27.4,\n      \"humidity\": 68.2,\n      \"pressure\": 1008.3,\n      \"methane\": 412,\n      \"methaneRaw\": 1893,\n      \"carbonDioxide\": 615,\n      \"waterOffset\": 120,\n      \"waterDepth\": 342,\n      \"soilMoisture\": 41.7,\n      \"soilMoistureRaw\": 2104,\n      \"batteryPercentage\": 82.5,\n      \"batteryVoltage\": 3921,\n      \"status\": 0,\n      \"error\": 0,\n      \"createdAt\": \"2026-09-07T04:15:00.000Z\"\n    }\n  ]\n}"
+              "body": "{\n  \"device\": {\n    \"id\": \"ABC-DEF-1234\",\n    \"modelName\": \"ABC-DEF\",\n    \"latitude\": 13.7563,\n    \"longitude\": 100.5018,\n    \"mcc\": 520,\n    \"mnc\": 3,\n    \"organizationId\": \"org_2t9x\",\n    \"organization\": {\n      \"id\": \"org_2t9x\",\n      \"name\": \"Mae On Rice Field 4\",\n      \"slug\": \"brave-green-otter\",\n      \"orgType\": \"field\",\n      \"parentOrgId\": \"org_sank\",\n      \"level\": 4,\n      \"path\": [\n        {\n          \"id\": \"org_root\",\n          \"name\": \"PACT Thailand\",\n          \"slug\": \"pact-thailand\",\n          \"orgType\": \"root\",\n          \"parentOrgId\": null,\n          \"level\": 0\n        },\n        {\n          \"id\": \"org_moac\",\n          \"name\": \"Ministry of Agriculture\",\n          \"slug\": \"moac\",\n          \"orgType\": \"government\",\n          \"parentOrgId\": \"org_root\",\n          \"level\": 1\n        },\n        {\n          \"id\": \"org_cnx\",\n          \"name\": \"Chiang Mai Province\",\n          \"slug\": \"chiang-mai\",\n          \"orgType\": \"province\",\n          \"parentOrgId\": \"org_moac\",\n          \"level\": 2\n        },\n        {\n          \"id\": \"org_sank\",\n          \"name\": \"San Kamphaeng\",\n          \"slug\": \"san-kamphaeng\",\n          \"orgType\": \"municipality\",\n          \"parentOrgId\": \"org_cnx\",\n          \"level\": 3\n        },\n        {\n          \"id\": \"org_2t9x\",\n          \"name\": \"Mae On Rice Field 4\",\n          \"slug\": \"brave-green-otter\",\n          \"orgType\": \"field\",\n          \"parentOrgId\": \"org_sank\",\n          \"level\": 4\n        }\n      ]\n    },\n    \"createdAt\": \"2026-08-01T09:12:00.000Z\",\n    \"updatedAt\": \"2026-09-07T04:10:00.000Z\"\n  },\n  \"limit\": 100,\n  \"offset\": 0,\n  \"order\": \"desc\",\n  \"count\": 1,\n  \"readings\": [\n    {\n      \"id\": \"tz4a98xxat96iws9zmbrgj3a\",\n      \"deviceId\": \"ABC-DEF-1234\",\n      \"temperature\": 27.4,\n      \"humidity\": 68.2,\n      \"pressure\": 1008.3,\n      \"methane\": 412,\n      \"methaneRaw\": 1893,\n      \"carbonDioxide\": 615,\n      \"waterOffset\": 120,\n      \"waterDepth\": 342,\n      \"soilMoisture\": 41.7,\n      \"soilMoistureRaw\": 2104,\n      \"batteryPercentage\": 82.5,\n      \"batteryVoltage\": 3921,\n      \"status\": 0,\n      \"error\": 0,\n      \"createdAt\": \"2026-09-07T04:15:00.000Z\"\n    }\n  ]\n}"
             }
           ]
         },
@@ -100,11 +136,22 @@
           "name": "Time range + paging",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/telemetry/devices/{{deviceId}}?from=2026-09-01T00:00:00Z&to=2026-09-07T00:00:00Z&limit=50&offset=0&order=asc",
-              "host": ["{{baseUrl}}"],
-              "path": ["telemetry", "devices", "{{deviceId}}"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "telemetry",
+                "devices",
+                "{{deviceId}}"
+              ],
               "query": [
                 {
                   "key": "from",
@@ -168,13 +215,26 @@
         {
           "name": "401 — no Authorization header",
           "request": {
-            "auth": { "type": "noauth" },
+            "auth": {
+              "type": "noauth"
+            },
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/telemetry/devices/{{deviceId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["telemetry", "devices", "{{deviceId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "telemetry",
+                "devices",
+                "{{deviceId}}"
+              ]
             },
             "description": "Overrides collection auth to send no credentials."
           },
@@ -198,14 +258,25 @@
                 "header": [],
                 "url": {
                   "raw": "{{baseUrl}}/telemetry/devices/{{deviceId}}",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["telemetry", "devices", "{{deviceId}}"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "telemetry",
+                    "devices",
+                    "{{deviceId}}"
+                  ]
                 }
               },
               "status": "Unauthorized",
               "code": 401,
               "_postman_previewlanguage": "json",
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "cookie": [],
               "body": "{\n  \"message\": \"Unauthorized\"\n}"
             }
@@ -217,15 +288,30 @@
             "auth": {
               "type": "bearer",
               "bearer": [
-                { "key": "token", "value": "not-the-token", "type": "string" }
+                {
+                  "key": "token",
+                  "value": "not-the-token",
+                  "type": "string"
+                }
               ]
             },
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/telemetry/devices/{{deviceId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["telemetry", "devices", "{{deviceId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "telemetry",
+                "devices",
+                "{{deviceId}}"
+              ]
             },
             "description": "A wrong token and a non-Bearer scheme both return the same opaque 401."
           },
@@ -246,14 +332,31 @@
           "name": "400 — from after to",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/telemetry/devices/{{deviceId}}?from=2026-09-07T00:00:00Z&to=2026-09-01T00:00:00Z",
-              "host": ["{{baseUrl}}"],
-              "path": ["telemetry", "devices", "{{deviceId}}"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "telemetry",
+                "devices",
+                "{{deviceId}}"
+              ],
               "query": [
-                { "key": "from", "value": "2026-09-07T00:00:00Z" },
-                { "key": "to", "value": "2026-09-01T00:00:00Z" }
+                {
+                  "key": "from",
+                  "value": "2026-09-07T00:00:00Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-09-01T00:00:00Z"
+                }
               ]
             },
             "description": "The range is checked before the device lookup."
@@ -280,18 +383,35 @@
                 "header": [],
                 "url": {
                   "raw": "{{baseUrl}}/telemetry/devices/{{deviceId}}?from=2026-09-07T00:00:00Z&to=2026-09-01T00:00:00Z",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["telemetry", "devices", "{{deviceId}}"],
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "telemetry",
+                    "devices",
+                    "{{deviceId}}"
+                  ],
                   "query": [
-                    { "key": "from", "value": "2026-09-07T00:00:00Z" },
-                    { "key": "to", "value": "2026-09-01T00:00:00Z" }
+                    {
+                      "key": "from",
+                      "value": "2026-09-07T00:00:00Z"
+                    },
+                    {
+                      "key": "to",
+                      "value": "2026-09-01T00:00:00Z"
+                    }
                   ]
                 }
               },
               "status": "Bad Request",
               "code": 400,
               "_postman_previewlanguage": "json",
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "cookie": [],
               "body": "{\n  \"message\": \"Query parameter 'from' must be earlier than 'to'\"\n}"
             }
@@ -301,11 +421,22 @@
           "name": "404 — unknown device",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/telemetry/devices/ZZZ-ZZZ-0000",
-              "host": ["{{baseUrl}}"],
-              "path": ["telemetry", "devices", "ZZZ-ZZZ-0000"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "telemetry",
+                "devices",
+                "ZZZ-ZZZ-0000"
+              ]
             }
           },
           "event": [
@@ -328,14 +459,25 @@
                 "header": [],
                 "url": {
                   "raw": "{{baseUrl}}/telemetry/devices/ZZZ-ZZZ-0000",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["telemetry", "devices", "ZZZ-ZZZ-0000"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "telemetry",
+                    "devices",
+                    "ZZZ-ZZZ-0000"
+                  ]
                 }
               },
               "status": "Not Found",
               "code": 404,
               "_postman_previewlanguage": "json",
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "cookie": [],
               "body": "{\n  \"message\": \"Device not found\"\n}"
             }
@@ -345,12 +487,28 @@
           "name": "422 — limit out of range",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/telemetry/devices/{{deviceId}}?limit=99999",
-              "host": ["{{baseUrl}}"],
-              "path": ["telemetry", "devices", "{{deviceId}}"],
-              "query": [{ "key": "limit", "value": "99999" }]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "telemetry",
+                "devices",
+                "{{deviceId}}"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "99999"
+                }
+              ]
             },
             "description": "Elysia's query validation rejects limit > 1000 before the handler runs."
           },
@@ -378,15 +536,31 @@
                 "header": [],
                 "url": {
                   "raw": "{{baseUrl}}/telemetry/devices/{{deviceId}}?limit=99999",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["telemetry", "devices", "{{deviceId}}"],
-                  "query": [{ "key": "limit", "value": "99999" }]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "telemetry",
+                    "devices",
+                    "{{deviceId}}"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "99999"
+                    }
+                  ]
                 }
               },
               "status": "Unprocessable Content",
               "code": 422,
               "_postman_previewlanguage": "json",
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "cookie": [],
               "body": "{\n  \"type\": \"validation\",\n  \"on\": \"query\",\n  \"property\": \"limit\",\n  \"message\": \"Too big: expected number to be <=1000\",\n  \"found\": {\n    \"limit\": \"99999\"\n  }\n}"
             }
@@ -396,11 +570,22 @@
           "name": "503 — token not configured",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/telemetry/devices/{{deviceId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["telemetry", "devices", "{{deviceId}}"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "telemetry",
+                "devices",
+                "{{deviceId}}"
+              ]
             },
             "description": "Returned to every caller — valid token or not — when the server has no TELEMETRY_API_TOKEN set. Reproduce by unsetting it and restarting the server; the endpoint fails closed rather than opening up."
           },
@@ -423,14 +608,25 @@
                 "header": [],
                 "url": {
                   "raw": "{{baseUrl}}/telemetry/devices/{{deviceId}}",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["telemetry", "devices", "{{deviceId}}"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "telemetry",
+                    "devices",
+                    "{{deviceId}}"
+                  ]
                 }
               },
               "status": "Service Unavailable",
               "code": 503,
               "_postman_previewlanguage": "json",
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "cookie": [],
               "body": "{\n  \"message\": \"Telemetry API token is not configured\"\n}"
             }

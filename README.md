@@ -128,7 +128,21 @@ Authorization: Bearer <TELEMETRY_API_TOKEN>
 row — `id`, `modelName`, `latitude`, `longitude`, `mcc`, `mnc`, `organizationId`, `createdAt`,
 `updatedAt` — every field but `id` and `modelName` nullable, since ingestion creates a device with
 nulls the first time it sees one. Each reading is a `telemetry_v0` row. All timestamps are ISO 8601
-strings. Other codes: `400` (`from` after `to`),
+strings.
+
+`device.organization` resolves `organizationId` into the owning organization, and is `null` for a
+device ingestion has not yet claimed. Alongside the organization's own columns it carries:
+
+| Field | Notes |
+| --- | --- |
+| `level` | index into `orgHierarchy`: `root` 0, `government` 1, `province` 2, `municipality` 3, `field` 4. `null` if `org_type` falls outside that set |
+| `path` | the ancestor chain built by following `parent_org_id`, root first, the owning organization last — so `path` is the device's full place in the hierarchy |
+
+The walk is capped at the five tiers in [orgHierarchy](src/utils/auth/permission.ts) and skips
+repeats, so malformed data with a parent cycle terminates instead of looping. It costs one query
+per tier; the endpoint is read-only and low traffic, so it is not batched.
+
+Other codes: `400` (`from` after `to`),
 `401` (missing/invalid token), `404` (unknown device), `422` (query parameter validation),
 `503` (`TELEMETRY_API_TOKEN` not configured).
 
