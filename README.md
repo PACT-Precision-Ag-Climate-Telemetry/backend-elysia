@@ -124,8 +124,11 @@ Authorization: Bearer <TELEMETRY_API_TOKEN>
 
 ### Responses
 
-`200` returns `{ deviceId, limit, offset, order, count, readings }`, where each reading is a
-`telemetry_v0` row with `createdAt` as an ISO 8601 string. Other codes: `400` (`from` after `to`),
+`200` returns `{ device, limit, offset, order, count, readings }`. `device` is the full `device`
+row — `id`, `modelName`, `latitude`, `longitude`, `mcc`, `mnc`, `organizationId`, `createdAt`,
+`updatedAt` — every field but `id` and `modelName` nullable, since ingestion creates a device with
+nulls the first time it sees one. Each reading is a `telemetry_v0` row. All timestamps are ISO 8601
+strings. Other codes: `400` (`from` after `to`),
 `401` (missing/invalid token), `404` (unknown device), `422` (query parameter validation),
 `503` (`TELEMETRY_API_TOKEN` not configured).
 

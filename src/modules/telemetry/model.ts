@@ -24,14 +24,69 @@ type TelemetryReadingResponse = {
   createdAt: string;
 };
 
+type OrganizationNodeResponse = {
+  id: string;
+  name: string;
+  slug: string;
+  orgType: string;
+  level: number | null;
+  parentOrgId: string | null;
+};
+
+type OrganizationResponse = OrganizationNodeResponse & {
+  path: OrganizationNodeResponse[];
+};
+
+type DeviceResponse = {
+  id: string;
+  modelName: string;
+  latitude: number | null;
+  longitude: number | null;
+  mcc: number | null;
+  mnc: number | null;
+  organizationId: string | null;
+  organization: OrganizationResponse | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type TelemetryQueryResponse = {
-  deviceId: string;
+  device: DeviceResponse;
   limit: number;
   offset: number;
   order: "asc" | "desc";
   count: number;
   readings: TelemetryReadingResponse[];
 };
+
+const organizationNodeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  orgType: z.string(),
+  // Index into orgHierarchy: root=0, government=1, province=2, municipality=3,
+  // field=4. null if the row carries an org_type outside that set.
+  level: z.number().nullable(),
+  parentOrgId: z.string().nullable(),
+}) satisfies z.ZodType<OrganizationNodeResponse>;
+
+const organizationSchema = organizationNodeSchema.extend({
+  // Root first, the device's own organization last.
+  path: z.array(organizationNodeSchema),
+}) satisfies z.ZodType<OrganizationResponse>;
+
+const deviceSchema = z.object({
+  id: z.string(),
+  modelName: z.string(),
+  latitude: z.number().nullable(),
+  longitude: z.number().nullable(),
+  mcc: z.number().nullable(),
+  mnc: z.number().nullable(),
+  organizationId: z.string().nullable(),
+  organization: organizationSchema.nullable(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+}) satisfies z.ZodType<DeviceResponse>;
 
 const readingSchema = z.object({
   id: z.string(),
@@ -70,7 +125,7 @@ export const TelemetryModel = {
     order: z.enum(["asc", "desc"]).default("desc"),
   }),
   responseValid: z.object({
-    deviceId: z.string(),
+    device: deviceSchema,
     limit: z.number(),
     offset: z.number(),
     order: z.enum(["asc", "desc"]),

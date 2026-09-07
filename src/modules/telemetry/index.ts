@@ -1,7 +1,11 @@
 import { Elysia } from "elysia";
 import bearerAuth from "@/modules/telemetry/bearer";
 import { TelemetryModel } from "@/modules/telemetry/model";
-import { deviceExists, getDeviceTelemetry } from "@/modules/telemetry/service";
+import {
+  getDevice,
+  getDeviceTelemetry,
+  getOrganizationChain,
+} from "@/modules/telemetry/service";
 
 /**
  * TEMPORARY read-only telemetry API.
@@ -29,9 +33,17 @@ const telemetryApp = new Elysia({ name: "telemetry", prefix: "/telemetry" })
         } as const);
       }
 
-      if (!(await deviceExists(deviceId))) {
+      const deviceRow = await getDevice(deviceId);
+
+      if (!deviceRow) {
         return status(404, { message: "Device not found" } as const);
       }
+
+      // Ingestion creates devices unclaimed, so organizationId is often null.
+      const orgPath = deviceRow.organizationId
+        ? await getOrganizationChain(deviceRow.organizationId)
+        : [];
+      const ownerOrg = orgPath[orgPath.length - 1];
 
       const rows = await getDeviceTelemetry({
         deviceId,
@@ -43,7 +55,12 @@ const telemetryApp = new Elysia({ name: "telemetry", prefix: "/telemetry" })
       });
 
       return status(200, {
-        deviceId,
+        device: {
+          ...deviceRow,
+          organization: ownerOrg ? { ...ownerOrg, path: orgPath } : null,
+          createdAt: deviceRow.createdAt.toISOString(),
+          updatedAt: deviceRow.updatedAt.toISOString(),
+        },
         limit,
         offset,
         order,
