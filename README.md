@@ -150,3 +150,55 @@ Other codes: `400` (`from` after `to`),
 curl -H "Authorization: Bearer $TELEMETRY_API_TOKEN" \
   "http://localhost:3000/telemetry/devices/ABC-DEF-1234?limit=50&order=desc"
 ```
+
+## Farm fields (PostGIS)
+
+A farm field is an area drawn on the map, owned by an organization. The boundary lives in
+`farm_field.area` as a PostGIS `geometry(Polygon,4326)` — SRID 4326 is WGS 84, the same frame GPS
+and GeoJSON use.
+
+| Column | Notes |
+| --- | --- |
+| `id` | cuid2 |
+| `name` | field name |
+| `organization_id` | the owner; cascades on organization delete |
+| `area` | `geometry(Polygon,4326)`, GiST indexed |
+| `created_at` / `updated_at` | `updated_at` refreshes via drizzle's `$onUpdate` |
+| `deleted_at` | soft delete — `null` means live |
+
+Devices point at their field through `device.farm_field_id`, so "the devices in a field" is
+`where farm_field_id = ...`. It is nullable (a device is unassigned until placed) and `ON DELETE SET
+NULL`, so hard-deleting a field never cascades into devices and their telemetry history.
+
+### Requirements
+
+The migration begins with `CREATE EXTENSION IF NOT EXISTS postgis;`. That statement needs a
+superuser or an `rds_superuser`-equivalent role, and the PostGIS binaries must be installed on the
+server — a stock `postgres:17` image does **not** have them; use `postgis/postgis` or install
+`postgresql-17-postgis-3`. Without the extension the `geometry` type does not exist and the whole
+migration fails.
+
+### Reading and writing the geometry
+
+PostGIS speaks EWKB on the wire, so selecting `area` directly returns an opaque hex string and
+inserting GeoJSON fails outright. Everything goes through [src/utils/geo.ts](src/utils/geo.ts):
+
+```ts
+import { fromGeometry, toGeometry, parseGeoJsonPolygon, isValidPolygon } from "@/utils/geo";
+
+// write — the polygon is bound as a parameter, not interpolated
+await db.insert(farmField).values({ name, organizationId, area: toGeometry(polygon) });
+
+// read — ST_AsGeoJSON returns text, so it still needs parsing
+const [row] = await db
+  .select({ id: farmField.id, area: fromGeometry(farmField.area) })
+  .from(farmField)
+  .where(and(eq(farmField.id, id), isNull(farmField.deletedAt)));
+const area = parseGeoJsonPolygon(row.area);
+```
+
+Validate with `isValidPolygon` before writing: PostGIS raises a runtime error on an unclosed ring,
+which would otherwise surface as a 500 instead of a 400.
+
+Every read must filter `isNull(farmField.deletedAt)` — the soft delete is a convention, not a
+constraint, so nothing in the database enforces it for you.

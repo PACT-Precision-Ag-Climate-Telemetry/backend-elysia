@@ -7,9 +7,25 @@ import {
   real,
   integer,
   inet,
+  customType,
 } from "drizzle-orm/pg-core";
 import { createId } from "@paralleldrive/cuid2";
 import { jsonb } from "drizzle-orm/cockroach-core";
+import { SRID_WGS84, type GeoJsonPolygon } from "@/types/geo";
+
+/**
+ * A PostGIS `geometry(Polygon,4326)` column.
+ *
+ * Drizzle's built-in `geometry` helper hardcodes `geometry(point)`, so a custom
+ * type is what gives us a polygon. PostGIS speaks WKB/EWKB on the wire, not
+ * GeoJSON, so reads and writes must go through ST_AsGeoJSON / ST_GeomFromGeoJSON
+ * — see @/utils/geo, and never select this column bare.
+ */
+const polygon = customType<{ data: GeoJsonPolygon; driverData: string }>({
+  dataType() {
+    return `geometry(Polygon,${SRID_WGS84})`;
+  },
+});
 
 export const user = pgTable("user", {
   id: text("id")
@@ -155,21 +171,60 @@ export const invitation = pgTable(
   ],
 );
 
-export const device = pgTable("device", {
-  id: text("id").primaryKey(),
-  modelName: text("model_name").notNull(),
-  latitude: real("latitude"),
-  longitude: real("longitude"),
-  mcc: integer("mcc"),
-  mnc: integer("mnc"),
-  organizationId: text("organization_id")
-    .references(() => organization.id, { onDelete: "cascade" }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at")
-    .defaultNow()
-    .$onUpdate(() => /* @__PURE__ */ new Date())
-    .notNull(),
-});
+export const farmField = pgTable(
+  "farm_field",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => createId()),
+    name: text("name").notNull(),
+    // The field's owner. Cascades so deleting an organization takes its fields
+    // with it, matching device.organization_id.
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    area: polygon("area").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+    // Soft delete: null means live. Every read must filter on this.
+    deletedAt: timestamp("deleted_at"),
+  },
+  (table) => [
+    index("farm_field_organizationId_idx").on(table.organizationId),
+    index("farm_field_deletedAt_idx").on(table.deletedAt),
+    // GiST is what makes ST_Contains / ST_Intersects on the boundary fast.
+    index("farm_field_area_idx").using("gist", table.area),
+  ],
+);
+
+export const device = pgTable(
+  "device",
+  {
+    id: text("id").primaryKey(),
+    modelName: text("model_name").notNull(),
+    latitude: real("latitude"),
+    longitude: real("longitude"),
+    mcc: integer("mcc"),
+    mnc: integer("mnc"),
+    organizationId: text("organization_id")
+      .references(() => organization.id, { onDelete: "cascade" }),
+    // The field this device sits in. Null while unassigned; set null rather
+    // than cascade on delete, so retiring a field never destroys telemetry
+    // history hanging off its devices.
+    farmFieldId: text("farm_field_id").references(() => farmField.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [index("device_farmFieldId_idx").on(table.farmFieldId)],
+);
 
 export const telemetryV0 = pgTable(
   "telemetry_v0",
