@@ -285,3 +285,45 @@ belongs to it.
 
 New 400s: `Only a field organization may draw a custom area`, `Organization area is not valid
 GeoJSON`, `Could not resolve a parent organization from the given area`.
+
+## Device visibility
+
+Who may see a device depends on the tier:
+
+| Level | Org types | Rule |
+| --- | --- | --- |
+| 0-3 | `root`, `government`, `province`, `municipality` | sees **any device standing inside its territory**, owned or not |
+| 4 | `field` | sees **only the devices it owns** |
+
+[src/utils/auth/device-visibility.ts](src/utils/auth/device-visibility.ts):
+
+```ts
+const { visible, reason, organizationId } = await canUserViewDevice(userId, deviceId);
+const ids = await listVisibleDeviceIds(userId);
+const check = await canOrganizationViewDevice(orgId, deviceId);
+```
+
+`reason` is `owner`, `area` or `none`. Ownership is reported ahead of territory when both apply, so
+the answer names the strongest claim rather than whichever row the planner returned first.
+
+The line sits at `AREA_VISIBILITY_MAX_LEVEL` (3). Add a sixth tier beneath `field` and raise the
+constant if that new tier becomes the ownership-only one — the two helpers derive their org-type
+lists from `orgHierarchy`, so nothing else needs touching.
+
+### How position is tested
+
+A device carries `latitude`/`longitude` as plain columns, not a geometry, so its position is built
+per query as `ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)` and tested with
+`ST_Covers(organization.area, point)` — `Covers` rather than `Contains`, so a device sitting exactly
+on a boundary counts as inside rather than nowhere.
+
+Two consequences worth knowing:
+
+- **A device with no GPS fix is invisible by area.** Ingestion writes `latitude`/`longitude` as null
+  until a device reports a position, so until then only its owner sees it.
+- **The point is computed, so no spatial index applies to it.** The GiST index on
+  `organization.area` still helps, but a device-heavy deployment will want a generated geometry
+  column on `device` with its own index.
+
+Ownership means `device.organization_id`, which ingestion leaves null — a device is invisible to
+everyone at level 4 until it is claimed.
