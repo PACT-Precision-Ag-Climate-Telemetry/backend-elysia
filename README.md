@@ -503,3 +503,71 @@ The two differ in shape: the temporary endpoint embeds the full device and its o
 every response, while the v1 telemetry route returns readings and expects the client to fetch the
 device separately from `GET /v1/device/:deviceId` — one round trip more, but it does not re-send a
 five-level organization chain alongside every page of readings.
+
+## Organization logo upload
+
+`POST /v1/org/:orgId/logo` — `multipart/form-data` with a `file` field. `DELETE /v1/org/:orgId/logo`
+removes it. Both require the `edit` permission, same as `PATCH /v1/org/:orgId`.
+
+The upload is **proxied through the API** rather than presigned. A presigned PUT hands the client a
+URL and then accepts whatever it sends; going through the API is what makes the checks below
+possible at all. Logos are small and written rarely, so the bandwidth through the app is not worth
+the two-step dance, the CORS configuration and the orphaned objects that direct-to-storage brings.
+
+### What happens to an uploaded file
+
+1. **Size cap** — refused at 2 MB, checked against `file.size` before the bytes are read into memory.
+2. **Magic-byte sniffing** — the format is decided by the leading bytes, never the declared
+   `Content-Type`, which is attacker-controlled. PNG, JPEG, WebP and GIF are accepted.
+3. **SVG is refused outright** (`415 svg_not_allowed`). It is XML, it can carry `<script>`, and it
+   would be served as an active document. This check cannot be delegated: **sharp rasterizes SVG
+   happily**, script tag and all, so the refusal has to happen before the bytes reach it.
+4. **Re-encoded to WebP** at quality 82, scaled to fit 512px on the longest edge, never enlarged.
+5. **EXIF is stripped** as a consequence of re-encoding — sharp only carries metadata across when
+   asked, so GPS coordinates and camera details are dropped. `rotate()` runs first, so an image
+   whose EXIF said "rotate 90" keeps its intended orientation once the tag is gone.
+6. **Decode is bounded** at 50 megapixels, because a few kilobytes of PNG can expand into gigapixels
+   of memory regardless of the file-size cap.
+
+Animated GIF and WebP collapse to their first frame: a logo does not need to move.
+
+### Storage layout
+
+The object key is `org/{orgId}/logo/{sha256-prefix}.webp` — content-addressed, so re-uploading the
+same image dedupes and the URL can be cached indefinitely. Client filenames are never used.
+
+`organization.logo` holds **the key**, not a URL, and the public URL is composed at read time from
+`S3_PUBLIC_BASE_URL`. Storing absolute URLs would turn a change of CDN domain into a migration over
+every row. Values that are already absolute URLs are passed through unchanged, so anything stored
+before uploads existed still resolves.
+
+Replacing a logo deletes the previous object, best effort. Removing one clears the column and
+deletes the object. Neither is done for an absolute URL, which is not ours to delete.
+
+### Environment variables
+
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `S3_ENDPOINT` | yes | e.g. `http://garage.internal:3900` |
+| `S3_BUCKET` | yes | |
+| `S3_ACCESS_KEY_ID` | yes | |
+| `S3_SECRET_ACCESS_KEY` | yes | |
+| `S3_REGION` | no | defaults to `garage`; ignored by Garage but the SigV4 signer needs a value |
+| `S3_PUBLIC_BASE_URL` | no | where the bucket is served publicly; without it, `url` comes back null |
+
+With any of the first four missing, upload returns `503 storage_not_configured` rather than failing
+obscurely. Uses Bun's built-in `S3Client`, so there is no AWS SDK in the dependency tree, and
+path-style addressing (`virtualHostedStyle: false`) because virtual-hosted style needs wildcard DNS.
+
+Garage grants anonymous read at the **bucket** level rather than per object, so make the logo bucket
+world-readable once and rely on the unguessable content-addressed keys — do not expect a
+per-object `public-read` ACL to work.
+
+> **Serve logos from a different hostname than the API.** The bucket holds user-supplied bytes; a
+> host that shares cookies with the app is a host where a bad file becomes a session problem.
+
+### Error codes
+
+`storage_not_configured` (503), `image_too_large` (413), `svg_not_allowed` and
+`unsupported_image_type` (415), `image_invalid` (400), `storage_unavailable` (502),
+`org_not_found` (404), `insufficient_permission` (403), `unauthorized` (401).

@@ -20,6 +20,7 @@
     "form-data": "^4.0.6",
     "mailgun.js": "^13.3.0",
     "pg": "^8.22.0",
+    "sharp": "^0.35.4",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0",
     "zod": "^4.4.3"
