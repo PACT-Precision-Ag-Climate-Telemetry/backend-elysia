@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNotNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { organization } from "@/db/schema";
 import type { AreaSource, GeoJsonArea } from "@/types/geo";
 import { orgHierarchy } from "@/utils/auth/permission";
@@ -61,6 +61,19 @@ export function tiersAbove(orgType: string): string[] {
     .map(([type]) => type);
 }
 
+/** Tiers strictly below the given one: for `province`, municipality and field. */
+export function tiersBelow(orgType: string): string[] {
+  const level = toLevel(orgType);
+
+  if (level === null) {
+    return [];
+  }
+
+  return Object.entries(orgHierarchy)
+    .filter(([, candidateLevel]) => candidateLevel > level)
+    .map(([type]) => type);
+}
+
 /**
  * Every organization whose territory covers the given area, most tightly
  * fitting first.
@@ -97,6 +110,8 @@ export async function findContainingOrganizations(
 
   const filters = [
     isNotNull(organization.area),
+    // A soft-deleted organization is not a territory any more.
+    isNull(organization.deletedAt),
     // Index-backed prefilter: only intersecting rows reach the exact test.
     sql`ST_Intersects(${geometry}, ${organization.area})`,
     // Full containment is a topological test, so ask PostGIS that question
@@ -191,6 +206,142 @@ export async function resolveParentOrganization(
   return { parent: null, rule: "none", candidates: [] };
 }
 
+/**
+ * Live organizations whose own territory falls inside the given area — the
+ * inverse of findContainingOrganizations, used to find what should hang off an
+ * organization being restored.
+ */
+export async function findOrganizationsWithinArea(
+  area: GeoJsonArea | GeoJsonArea[],
+  options: { orgTypes?: string[]; excludeOrgId?: string } = {},
+): Promise<{ id: string; orgType: string; parentOrgId: string | null }[]> {
+  const { orgTypes, excludeOrgId } = options;
+
+  if (orgTypes && orgTypes.length === 0) {
+    return [];
+  }
+
+  const geometry = toAreaGeometry(area);
+
+  return db
+    .select({
+      id: organization.id,
+      orgType: organization.orgType,
+      parentOrgId: organization.parentOrgId,
+    })
+    .from(organization)
+    .where(
+      and(
+        isNotNull(organization.area),
+        isNull(organization.deletedAt),
+        sql`ST_Intersects(${organization.area}, ${geometry})`,
+        sql`ST_CoveredBy(${organization.area}, ${geometry})`,
+        ...(orgTypes
+          ? [sql`${organization.orgType} = ANY(${sql.param(orgTypes)})`]
+          : []),
+        ...(excludeOrgId ? [ne(organization.id, excludeOrgId)] : []),
+      ),
+    );
+}
+
+export interface ReparentedOrganization {
+  id: string;
+  from: string | null;
+  to: string | null;
+  rule: ParentResolutionRule | "promoted";
+}
+
+/**
+ * Promotes the live children of an organization to its own parent.
+ *
+ * Used when a middle organization is retired: rather than orphaning the subtree
+ * or refusing the delete, each child moves up a rung. Tier ordering still holds,
+ * because a grandparent sits above the parent that just left.
+ *
+ * When the retired organization had no parent, its children become top level.
+ */
+export async function promoteChildrenToGrandparent(
+  orgId: string,
+  grandparentOrgId: string | null,
+): Promise<ReparentedOrganization[]> {
+  const moved = await db
+    .update(organization)
+    .set({ parentOrgId: grandparentOrgId })
+    .where(
+      and(
+        eq(organization.parentOrgId, orgId),
+        isNull(organization.deletedAt),
+      ),
+    )
+    .returning({ id: organization.id });
+
+  return moved.map((row) => ({
+    id: row.id,
+    from: orgId,
+    to: grandparentOrgId,
+    rule: "promoted" as const,
+  }));
+}
+
+/**
+ * Re-resolves parentage from geography for the given organizations.
+ *
+ * This is what makes a restore self-correcting: children promoted away when an
+ * organization was retired fall back under it once it returns, because the
+ * smallest territory containing them is that organization again.
+ *
+ * Only organizations that actually have a boundary are touched, and only when a
+ * parent resolves. An organization whose parentage was set by hand rather than
+ * drawn keeps it, instead of being nulled out by a geography that cannot speak
+ * to it.
+ */
+export async function recomputeParentOrganizations(
+  orgIds: string[],
+): Promise<ReparentedOrganization[]> {
+  const changes: ReparentedOrganization[] = [];
+
+  for (const orgId of orgIds) {
+    const [row] = await db
+      .select({
+        id: organization.id,
+        orgType: organization.orgType,
+        parentOrgId: organization.parentOrgId,
+        area: sql<string | null>`ST_AsGeoJSON(${organization.area})`,
+      })
+      .from(organization)
+      .where(and(eq(organization.id, orgId), isNull(organization.deletedAt)))
+      .limit(1);
+
+    if (!row?.area) {
+      continue;
+    }
+
+    const resolution = await resolveParentOrganization(
+      JSON.parse(row.area) as GeoJsonArea,
+      row.orgType,
+      { excludeOrgId: orgId },
+    );
+
+    if (!resolution.parent || resolution.parent.id === row.parentOrgId) {
+      continue;
+    }
+
+    await db
+      .update(organization)
+      .set({ parentOrgId: resolution.parent.id })
+      .where(eq(organization.id, orgId));
+
+    changes.push({
+      id: orgId,
+      from: row.parentOrgId,
+      to: resolution.parent.id,
+      rule: resolution.rule,
+    });
+  }
+
+  return changes;
+}
+
 export interface ContainmentCheck {
   contained: boolean;
   coverage: number;
@@ -218,7 +369,7 @@ export async function checkParentContainsArea(
       `,
     })
     .from(organization)
-    .where(eq(organization.id, parentOrgId))
+    .where(and(eq(organization.id, parentOrgId), isNull(organization.deletedAt)))
     .limit(1);
 
   if (!row) {

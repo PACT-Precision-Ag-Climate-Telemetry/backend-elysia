@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { member, organization } from "@/db/schema";
 import db from "@/utils/db";
 import {
@@ -68,6 +68,11 @@ export type HierarchyPermissionInput = {
   userId: string;
   targetOrgId: string;
   action: Action;
+  /**
+   * Consider a soft-deleted target. Off by default, so a deleted organization
+   * cannot be acted on; restoring one is the exception that needs it.
+   */
+  includeDeleted?: boolean;
 };
 
 export type HierarchyPermissionResult = {
@@ -88,7 +93,12 @@ export async function checkOrgHierarchyPermission(
       orgType: organization.orgType,
     })
     .from(organization)
-    .where(eq(organization.id, input.targetOrgId))
+    .where(
+      and(
+        eq(organization.id, input.targetOrgId),
+        ...(input.includeDeleted ? [] : [isNull(organization.deletedAt)]),
+      ),
+    )
     .limit(1);
 
   if (!targetOrg) {
@@ -125,7 +135,8 @@ export async function checkOrgHierarchyPermission(
       parentOrgId: organization.parentOrgId,
       orgType: organization.orgType,
     })
-    .from(organization);
+    .from(organization)
+    .where(isNull(organization.deletedAt));
 
   const orgMap = new Map(actorOrgs.map((org) => [org.id, org]));
 

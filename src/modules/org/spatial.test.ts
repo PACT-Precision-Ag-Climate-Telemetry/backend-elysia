@@ -1,6 +1,10 @@
 /// <reference types="bun-types" />
 import { describe, expect, it } from "bun:test";
-import { isAreaSourceAllowed, tiersAbove } from "@/modules/org/spatial";
+import {
+  isAreaSourceAllowed,
+  tiersAbove,
+  tiersBelow,
+} from "@/modules/org/spatial";
 
 describe("tiersAbove", () => {
   it("lists every tier above a field", () => {
@@ -45,6 +49,45 @@ describe("isAreaSourceAllowed", () => {
       "field",
     ]) {
       expect(isAreaSourceAllowed(orgType, "reference")).toBe(true);
+    }
+  });
+});
+
+describe("tiersBelow", () => {
+  it("lists every tier under root", () => {
+    expect(tiersBelow("root")).toEqual([
+      "government",
+      "province",
+      "municipality",
+      "field",
+    ]);
+  });
+
+  it("lists only the tiers under a province", () => {
+    expect(tiersBelow("province")).toEqual(["municipality", "field"]);
+  });
+
+  it("returns nothing for field, the bottom tier", () => {
+    expect(tiersBelow("field")).toEqual([]);
+  });
+
+  it("returns nothing for an org type outside the hierarchy", () => {
+    expect(tiersBelow("not-a-tier")).toEqual([]);
+  });
+
+  it("is the exact complement of tiersAbove, excluding the tier itself", () => {
+    for (const orgType of [
+      "root",
+      "government",
+      "province",
+      "municipality",
+      "field",
+    ]) {
+      const both = [...tiersAbove(orgType), ...tiersBelow(orgType)];
+
+      expect(both).not.toContain(orgType);
+      expect(both.length).toBe(4);
+      expect(new Set(both).size).toBe(both.length);
     }
   });
 });

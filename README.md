@@ -263,8 +263,8 @@ raw degrees distorts badly away from the equator.
 
 ### Creation
 
-`POST /org/create` accepts an optional `area` — one GeoJSON Polygon/MultiPolygon, or an array of
-them to be joined — plus an optional `areaSource`, defaulting to `custom` for a field and
+[`POST /v1/org`](#post-v1org) accepts an optional `area` — one GeoJSON Polygon/MultiPolygon, or an
+array of them to be joined — plus an optional `areaSource`, defaulting to `custom` for a field and
 `reference` for every higher tier.
 
 **When an area is supplied, geography decides the parent and any `parentOrgId` in the body is
@@ -278,13 +278,11 @@ ignored.** Resolution runs in two stages:
 The response echoes `areaSource` and `parentResolution`, so a caller can tell a clean containment
 from a straddle that was resolved by majority.
 
-Creating a non-field organization still requires `owner` or `admin` in the parent — now checked
-against the *resolved* parent. A field organization is attached to whatever territory it falls in
-without needing membership there, which is the point: a field physically inside a municipality
-belongs to it.
+Creating a non-field organization requires `owner` or `admin` in the *resolved* parent. A field
+organization is attached to whatever territory it falls in without needing membership there, which
+is the point: a field physically inside a municipality belongs to it.
 
-New 400s: `Only a field organization may draw a custom area`, `Organization area is not valid
-GeoJSON`, `Could not resolve a parent organization from the given area`.
+Related error codes: `custom_area_not_allowed`, `invalid_area`, `parent_unresolvable`.
 
 ## Device visibility
 
@@ -327,3 +325,137 @@ Two consequences worth knowing:
 
 Ownership means `device.organization_id`, which ingestion leaves null — a device is invisible to
 everyone at level 4 until it is claimed.
+
+## v1 API
+
+Versioned endpoints live under `/v1`. The unversioned routes stay as they are; nothing about them
+changed.
+
+### `POST /v1/org`
+
+Creates an organization for the signed-in user, following the hierarchy rules.
+[src/modules/org/v1.ts](src/modules/org/v1.ts)
+
+**Slug, by tier:**
+
+| Tier | Slug |
+| --- | --- |
+| `field` (level 4) | assigned at random; any `slug` in the request is **ignored** |
+| levels 0-3 | **required**, and must be unique |
+
+A field organization names someone's own plot, so it has no reason to pick a public identifier.
+Every tier above names an administrative body, where the identifier is the point.
+
+Supplied slugs must be lowercase letters, digits and single hyphens between them (3-64 chars) —
+the same shape the generator produces. Generation is bounded at 10 attempts and fails loudly rather
+than looping forever once the dictionary space fills up.
+
+**Body:**
+
+| Field | Notes |
+| --- | --- |
+| `orgName` | required, min 5 characters |
+| `orgType` | one of the five tiers, defaults to `field` |
+| `slug` | required above level 4, ignored at level 4 |
+| `parentOrgId` | required above level 4 unless `area` resolves one; ignored when `area` is given |
+| `area` | optional GeoJSON, or an array to join; resolves the parent by geography |
+| `areaSource` | `custom` (field only) or `reference`; defaults by tier |
+| `logo` | optional |
+
+**Responses:** `201` returns the organization plus `slugSource` (`generated` \| `provided`),
+`parentResolution` and `areaSource`, so a client can see how each was decided.
+
+Errors carry a machine-readable code alongside the message, rather than making clients match on
+text:
+
+```json
+{ "code": "slug_required", "message": "slug is required for this organization type" }
+```
+
+| Code | Status |
+| --- | --- |
+| `unauthorized` | 401 |
+| `slug_required`, `slug_taken` | 400 |
+| `parent_required`, `parent_not_found`, `parent_unresolvable` | 400 |
+| `hierarchy_violation`, `invalid_area`, `custom_area_not_allowed` | 400 |
+| `root_not_allowed`, `insufficient_permission` | 403 |
+| `org_not_found` | 404 |
+| `slug_not_editable`, `org_not_deleted` | 400 |
+| `slug_generation_failed` | 500 |
+
+**Who may create what.** A `field` needs no parent and no existing membership, which is what lets a
+brand new user create one. Every higher tier requires `owner` or `admin` in the parent. `root`
+cannot be created here at all — it has no tier above it, so there is nothing to authorize against;
+seed it out of band.
+
+### `PATCH /v1/org/:orgId`
+
+Edits an organization. Requires the `edit` permission, resolved through
+[checkOrgHierarchyPermission](src/utils/auth/hierarchy.ts) — `myOrg` scope for your own
+organization, `subOrg` for one below you in the hierarchy.
+
+Send only what changes; an empty body is rejected rather than issuing a no-op update. `orgName`,
+`slug`, `logo`, `area` and `areaSource` are all optional, and `logo: null` clears it.
+
+- **A field organization cannot change its slug** (`slug_not_editable`) — it was assigned one at
+  random on creation, so it is not the caller's to pick.
+- **Changing `area` re-resolves the parent**, because moving a boundary can move the organization
+  into a different territory. The response reports the new `parentResolution`.
+
+The response lists `updatedFields`, so a caller can see exactly what the request changed.
+
+### `DELETE /v1/org/:orgId`
+
+Requires the `delete` permission. **This is a soft delete**: it sets `deleted_at` and nothing else.
+
+A hard delete would cascade `organization → device → telemetry_v0` and destroy the entire reading
+history of every device the organization owns, which is not a reasonable outcome of pressing a
+delete button.
+
+**Retiring a middle organization promotes its children rather than orphaning them.** Each live child
+takes on the deleted organization's own parent — a field under a deleted municipality moves up to
+the province. Tier ordering still holds, since a grandparent sits above the parent that just left.
+A deleted top-level organization leaves its children top level, with a null parent.
+
+The response reports `promotedTo` and the `reparented` list, so the caller sees exactly what moved.
+
+### `POST /v1/org/:orgId/restore`
+
+Brings a soft-deleted organization back and **recomputes the hierarchy from geography**, which is
+what puts the promoted children back where they belong:
+
+1. the restored organization's own parent is re-resolved from its area;
+2. every live organization at a tier below it whose territory falls inside its own is re-resolved
+   too — found by inverting the containment test (`ST_CoveredBy(child.area, restored.area)`).
+
+Children promoted away on delete fall back under it automatically, because it is once again the
+smallest territory that contains them. No record of the old structure is kept; the boundaries are
+the source of truth, so the tree is rebuilt from them rather than replayed from a log.
+
+Requires the `delete` permission — the one that retired it. Because the target is deleted, the
+permission check is called with `includeDeleted`, which it otherwise refuses.
+
+Recomputation is deliberately conservative: an organization with **no** boundary is skipped
+entirely, and one whose area resolves to no parent keeps the parent it has. Parentage set by hand
+is never nulled out by a geography that cannot speak to it.
+
+Restoring a live organization returns `400 org_not_deleted`.
+
+Every query that grants access or resolves structure now filters `deleted_at IS NULL`: containment
+and parent resolution in [spatial.ts](src/modules/org/spatial.ts), device visibility in
+[device-visibility.ts](src/utils/auth/device-visibility.ts), and the permission walk in
+[hierarchy.ts](src/utils/auth/hierarchy.ts). A soft-deleted organization therefore grants no
+visibility, adopts no children and is never resolved as a parent.
+
+### Permission matrix
+
+`edit` and `delete` come straight from `rolePermissions`:
+
+| Role | Edit own | Delete own | Edit below | Delete below |
+| --- | --- | --- | --- | --- |
+| `owner` | yes | yes | yes | yes |
+| `admin` | yes | **no** | yes | yes |
+| `member` | no | no | no | no |
+
+An admin can edit its own organization but not delete it, while it can do both to one below —
+that asymmetry is the existing model, not something these endpoints add.

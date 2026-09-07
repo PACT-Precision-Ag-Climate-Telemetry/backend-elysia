@@ -5,7 +5,7 @@ import openapiApp from "@/modules/openapi";
 import betterAuth from "@/modules/auth";
 import hierarchyExampleApp from "@/modules/auth/hierarchy-example";
 import httpLogger from "@/modules/http";
-import organizationApp from "@/modules/org";
+import organizationV1App from "@/modules/org/v1";
 import telemetryApp from "@/modules/telemetry";
 import type { TelemetryPayloadV0 } from "@/types/telemetry";
 import { ingestTelemetry } from "@/utils/ingestion";
@@ -25,7 +25,7 @@ const app = new Elysia({
   .use(openapiApp)
   .use(betterAuth)
   .use(hierarchyExampleApp)
-  .use(organizationApp)
+  .use(organizationV1App)
   .use(telemetryApp)
   .use(httpLogger())
   .get("/", () => "Hello Elysia")

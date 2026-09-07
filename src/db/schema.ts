@@ -144,9 +144,14 @@ export const organization = pgTable(
     // "reference" (fixed administrative GeoJSON, possibly several joined) or
     // "custom" (hand drawn). Only a field organization may be "custom".
     areaSource: text("area_source"),
+    // Soft delete: null means live. A hard delete would cascade through device
+    // into telemetry_v0 and destroy the org's entire reading history, so
+    // deleting an organization only ever sets this.
+    deletedAt: timestamp("deleted_at"),
   },
   (table) => [
     index("organization_parentOrgId_idx").on(table.parentOrgId),
+    index("organization_deletedAt_idx").on(table.deletedAt),
     // Makes ST_Intersects / ST_CoveredBy against every organization cheap, which
     // is what resolving a parent by containment leans on.
     index("organization_area_idx").using("gist", table.area),

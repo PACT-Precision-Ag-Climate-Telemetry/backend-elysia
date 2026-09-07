@@ -1,4 +1,4 @@
-import { eq, or, sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import { device, member, organization } from "@/db/schema";
 import { orgHierarchy } from "@/utils/auth/permission";
 import db from "@/utils/db";
@@ -136,7 +136,7 @@ export async function canUserViewDevice(
     .from(member)
     .innerJoin(organization, eq(organization.id, member.organizationId))
     .innerJoin(device, eq(device.id, deviceId))
-    .where(eq(member.userId, userId));
+    .where(and(eq(member.userId, userId), isNull(organization.deletedAt)));
 
   return pickVisibility(rows);
 }
@@ -154,7 +154,7 @@ export async function listVisibleDeviceIds(userId: string): Promise<string[]> {
       device,
       or(deviceOwnedByOrg, sql`(${orgTypeSeesByArea()} AND ${deviceInOrgArea})`)!,
     )
-    .where(eq(member.userId, userId));
+    .where(and(eq(member.userId, userId), isNull(organization.deletedAt)));
 
   return rows.map((row) => row.id);
 }
@@ -176,7 +176,9 @@ export async function canOrganizationViewDevice(
     })
     .from(organization)
     .innerJoin(device, eq(device.id, deviceId))
-    .where(eq(organization.id, organizationId))
+    .where(
+      and(eq(organization.id, organizationId), isNull(organization.deletedAt)),
+    )
     .limit(1);
 
   return row ? pickVisibility([row]) : DENIED;
