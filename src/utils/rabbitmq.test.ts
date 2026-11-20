@@ -27,13 +27,14 @@ const { startIngestionTelemetryConsumer, buildTelemetryRoutingKey, validateTelem
 
 const reading = {
   timestamp: 1756512000, timedif: 300, temperature: 23.100000381469727, humidity: 61.5,
-  pressure: 1008.25, carbon_dioxide: 412, methane_raw: 1350, methane: 8, offset: 120,
+  carbon_dioxide: 412, methane_raw: 13.5, methane: 8, offset: 120,
   depth: 940, moisture_raw: 2100, moisture: 34.5, battery_voltage: 3980,
-  battery_percentage: 87.25, status: 0, status_flags: [], error_code: 0,
+  battery_percentage: 87.25, esp_temperature: 41.25, status: 0, status_flags: [],
 };
 const validPayload = {
-  id: "ABC-DEF-1234", version: "0", flags: 128, readings: [reading],
-  has_gps: true, latitude: 13.7563, longitude: 100.5018, has_cell: false,
+  id: "ABC-DEF-1234", version: "0", flags: 160, readings: [reading],
+  has_raw: true, has_gps: true, latitude: 13.7563, longitude: 100.5018, has_cell: false,
+  signal_strength: -85, reset_reason: 9, reset_reason_name: "brownout",
 };
 const msg = (body: string) => ({ content: Buffer.from(body, "utf8"), fields: {}, properties: {} });
 
@@ -216,17 +217,30 @@ describe("telemetry schema v0", () => {
 
   it("accepts the schema's own example payload", () => {
     expect(ok({
-      id: "ABC-DEF-1234", version: "0", flags: 128,
+      id: "ABC-DEF-1234", version: "0", flags: 160,
       readings: [
         { ...reading },
         { timestamp: 1756512300, timedif: 300, temperature: 23.5, humidity: 60.75,
-          pressure: 1008.1, carbon_dioxide: 418, methane_raw: 1361, methane: 9, offset: 120,
+          carbon_dioxide: 418, methane_raw: 13.61, methane: 9, offset: 120,
           depth: 938, moisture_raw: 2094, moisture: 34.2, battery_voltage: 3975,
-          battery_percentage: 87.1, status: 2, status_flags: ["ultrasonic_read_failed"],
-          error_code: 0 },
+          battery_percentage: 87.1, esp_temperature: 41.5, status: 2,
+          status_flags: ["ultrasonic_read_failed"] },
       ],
-      has_gps: true, latitude: 13.7563, longitude: 100.5018, has_cell: false,
+      has_raw: true, has_gps: true, latitude: 13.7563, longitude: 100.5018, has_cell: false,
+      signal_strength: -85, reset_reason: 9, reset_reason_name: "brownout",
     })).toBe(true);
+  });
+
+  it("requires raw fields exactly when has_raw is true", () => {
+    const { methane_raw, moisture_raw, ...noRaw } = reading;
+    expect(ok({ ...validPayload, readings: [noRaw] })).toBe(false);
+    expect(ok({ ...validPayload, has_raw: false, flags: 128, readings: [noRaw] })).toBe(true);
+    expect(ok({ ...validPayload, has_raw: false, flags: 128 })).toBe(false);
+  });
+
+  it("rejects the retired pressure and error_code fields", () => {
+    expect(ok(withReading({ pressure: 1008 }))).toBe(false);
+    expect(ok(withReading({ error_code: 0 }))).toBe(false);
   });
 
   it("requires status_flags on every reading", () => {

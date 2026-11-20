@@ -9,7 +9,6 @@ type TelemetryReadingResponse = {
   deviceId: string;
   temperature: number | null;
   humidity: number | null;
-  pressure: number | null;
   methane: number | null;
   methaneRaw: number | null;
   carbonDioxide: number | null;
@@ -19,8 +18,8 @@ type TelemetryReadingResponse = {
   soilMoistureRaw: number | null;
   batteryPercentage: number | null;
   batteryVoltage: number | null;
+  espTemperature: number | null;
   status: number | null;
-  error: number | null;
   createdAt: string;
 };
 
@@ -93,7 +92,6 @@ export const telemetryReadingSchema = z.object({
   deviceId: z.string(),
   temperature: z.number().nullable(),
   humidity: z.number().nullable(),
-  pressure: z.number().nullable(),
   methane: z.number().nullable(),
   methaneRaw: z.number().nullable(),
   carbonDioxide: z.number().nullable(),
@@ -103,8 +101,8 @@ export const telemetryReadingSchema = z.object({
   soilMoistureRaw: z.number().nullable(),
   batteryPercentage: z.number().nullable(),
   batteryVoltage: z.number().nullable(),
+  espTemperature: z.number().nullable(),
   status: z.number().nullable(),
-  error: z.number().nullable(),
   createdAt: z.string().datetime(),
 }) satisfies z.ZodType<TelemetryReadingResponse>;
 

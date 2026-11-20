@@ -31,6 +31,7 @@ const TELEMETRY_STATUS_FLAGS = [
   "temperature_read_failed",
   "methane_read_failed",
   "co2_read_failed",
+  "moisture_read_failed",
 ] as const;
 const UNKNOWN_STATUS_FLAG_PATTERN = /^unknown_bit_[0-7]$/;
 const DEVICE_ID_PATTERN = /^.{3}-.{3}-.{4}$/;
@@ -55,24 +56,23 @@ const telemetryReadingSchema = z
     timestamp: z.number().int().min(0),
     timedif: z.number().int().min(0).max(65535),
     temperature: z.number(),
-    humidity: z.number(),
-    pressure: z.number(),
+    humidity: z.number().min(0).max(655.35),
     carbon_dioxide: z.number().int().min(0).max(65535),
-    methane_raw: z.number().int().min(0).max(65535),
     methane: z.number().int().min(0).max(65535),
+    methane_raw: z.number().min(0).max(655.35).optional(),
     offset: z.number().int().min(0).max(65535),
     depth: z.number().int().min(0).max(65535),
-    moisture_raw: z.number().int().min(0).max(65535),
     moisture: z.number().min(0).max(655.35),
+    moisture_raw: z.number().int().min(0).max(65535).optional(),
     battery_voltage: z.number().int().min(0).max(65535),
     battery_percentage: z.number().min(0).max(655.35),
+    esp_temperature: z.number().min(-327.68).max(327.67),
     status: z.number().int().min(0).max(255),
     status_flags: z
       .array(telemetryStatusFlagSchema)
       .refine((flags) => new Set(flags).size === flags.length, {
         message: "must not contain duplicate flags",
       }),
-    error_code: z.number().int().min(0).max(255),
   })
   .strict();
 
@@ -82,15 +82,38 @@ const telemetryPayloadSchema: z.ZodType<TelemetryPayloadV0> = z
     version: z.string().regex(/^[0-9]+$/),
     flags: z.number().int().min(0).max(255),
     readings: z.array(telemetryReadingSchema).min(1).max(255),
+    has_raw: z.boolean(),
     has_gps: z.boolean(),
     latitude: z.number().min(-90).max(90).optional(),
     longitude: z.number().min(-180).max(180).optional(),
     has_cell: z.boolean(),
     mobile_country_code: z.number().int().min(0).max(65535).optional(),
     mobile_network_code: z.number().int().min(0).max(65535).optional(),
+    signal_strength: z.number().int().min(-128).max(127),
+    reset_reason: z.number().int().min(0).max(255),
+    reset_reason_name: z.string(),
   })
   .strict()
   .superRefine((payload, ctx) => {
+    payload.readings.forEach((reading, index) => {
+      for (const field of ["methane_raw", "moisture_raw"] as const) {
+        const isSet = reading[field] !== undefined;
+        if (payload.has_raw && !isSet) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `${field} is required when has_raw is true`,
+            path: ["readings", index, field],
+          });
+        } else if (!payload.has_raw && isSet) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `${field} must be omitted when has_raw is false`,
+            path: ["readings", index, field],
+          });
+        }
+      }
+    });
+
     const requireWhenPresent = (
       isPresent: boolean,
       field: OptionalBlockField,
