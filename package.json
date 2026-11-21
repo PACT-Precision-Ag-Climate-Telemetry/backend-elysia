@@ -1,6 +1,6 @@
 {
   "name": "backend-elysia",
-  "version": "2.1.0",
+  "version": "2.3.1",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "db:generate": "drizzle-kit generate",

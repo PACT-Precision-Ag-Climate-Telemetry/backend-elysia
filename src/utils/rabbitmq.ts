@@ -275,10 +275,26 @@ async function processMessage(
       payload: rawBody,
     });
     logger.error({
-      message: `(rabbitmq.util.ts) Telemetry handler failed while saving payload. Rejecting with requeue=false. ${error}`,
+      message: `(rabbitmq.util.ts) Telemetry handler failed while saving payload. Rejecting with requeue=false. ${describeError(error)}`,
     });
     rejectMalformedPayload(channel, message, error);
   }
+}
+
+function describeError(error: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; current && depth < 5; depth++) {
+    if (current instanceof Error) {
+      const code = (current as { code?: string }).code;
+      parts.push(code ? `${current.message} [code=${code}]` : current.message);
+      current = current.cause;
+    } else {
+      parts.push(String(current));
+      break;
+    }
+  }
+  return parts.join(" <- caused by: ");
 }
 
 function rejectMalformedPayload(
@@ -287,7 +303,7 @@ function rejectMalformedPayload(
   error: unknown,
 ): void {
   logger.error({
-    message: `(rabbitmq.util.ts) Sending basic.reject(requeue=false) for malformed/failed payload. ${error}`,
+    message: `(rabbitmq.util.ts) Sending basic.reject(requeue=false) for malformed/failed payload. ${describeError(error)}`,
   });
   channel.reject(message, false);
 }
